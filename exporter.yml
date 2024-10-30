@@ -1,0 +1,12 @@
+addr: '0.0.0.0'
+port: 8866
+
+topics:
+  - name: /sensors/camera/front_medium/image_rect_color/compressed
+    metrics:
+      offset: true
+      delay: true
+      bw: true
+      rate: true
+
+  # add more topics to subscribe to
