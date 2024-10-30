@@ -7,7 +7,12 @@ A ROS 1 node to export basic topic statistics for [Prometheus](https://prometheu
 * Python >= 3.8
 
 ## Usage
-### Using `roslaunch`
+### Installing dependencies
+```bash
+pip install -r requirements.txt
+```
+
+### With ROS
 ```bash
 roslaunch ros_blackbox_exporter ros_blackbox_exporter.launch
 
@@ -19,6 +24,19 @@ roslaunch ros_blackbox_exporter ros_blackbox_exporter.launch
 ```bash
 cd src
 python3 ros_blackbox_exporter.py
+```
+
+### In Docker
+```bash
+# Replace IP with the actual IP of your ROS master
+
+docker build . -t ros_blackbox_exporter
+docker run -d \
+    -v $(pwd)/exporter.yml:/home/ros_ws/src/ros_blackbox_exporter/exporter.yml \
+    -e ROS_MASTER_URI=http://172.17.0.1:11311 \
+    -e ROS_IP=172.17.0.1 \
+    -p 8866:8866 \
+    ros_blackbox_exporter
 ```
 
 ## Metrics
