@@ -43,6 +43,10 @@ docker run -d \
 Metrics are exposed at http://localhost:8866.
 
 ```
+# HELP ros_blackbox_topic_ok Whether topic is available or not
+# TYPE ros_blackbox_topic_ok gauge
+ros_blackbox_topic_ok{topic="/sensors/camera/front_medium/image_rect_color/compressed"} 1.0
+
 # HELP ros_blackbox_topic_offset Time since last message on this topic in seconds
 # TYPE ros_blackbox_topic_offset gauge
 ros_blackbox_topic_offset{topic="/sensors/camera/front_medium/image_rect_color/compressed",type="sensor_msgs/CompressedImage"} 1.4e-05
