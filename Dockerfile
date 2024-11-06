@@ -1,3 +1,5 @@
+# To use custom message definitions, mount them to /home/ros_ws/custom
+
 FROM ros:noetic
 
 RUN apt-get update && \
@@ -16,12 +18,7 @@ RUN /bin/bash -c "source /opt/ros/noetic/setup.bash && catkin_make"
 SHELL ["/bin/bash", "-c"]
 RUN echo "source /opt/ros/noetic/setup.bash && source /home/ros_ws/devel/setup.bash" >> ~/.bashrc
 
-# To use custom message definitions, mount them to /home/ros_ws/custom
-
-COPY docker/entrypoint.sh /home/ros_ws/entrypoint.sh
-RUN chmod +x /home/ros_ws/entrypoint.sh
-
-CMD ["/bin/bash", "-c", "/home/ros_ws/entrypoint.sh && roslaunch ros_blackbox_exporter ros_blackbox_exporter.launch"]
+CMD ["/bin/bash", "-c", "bash /home/ros_ws/src/ros_blackbox_exporter/docker/entrypoint.sh && source /opt/ros/noetic/setup.bash && source /home/ros_ws/devel/setup.bash && roslaunch ros_blackbox_exporter ros_blackbox_exporter.launch"]
 
 ENV ROS_MASTER_URI=http://172.17.0.1:11311
 ENV ROS_IP=172.17.0.1
