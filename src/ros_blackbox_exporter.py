@@ -96,7 +96,7 @@ class ROSSubscription:
         topic_type, _, _ = rostopic.get_topic_class(self.topic)
         self.msgtype = topic_type._type
         self.msgclass = topic_type
-        self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback)
+        self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback, queue_size=1)
 
 
     def callback(self, raw: rospy.AnyMsg):
