@@ -12,6 +12,7 @@ import rospy, rostopic
 
 logging.basicConfig(level=logging.INFO)
 
+metric_topic_ok = Gauge('ros_blackbox_topic_ok', 'Whether topic is available or not', ['topic'])
 metric_topic_offset = Gauge('ros_blackbox_topic_offset', 'Time since last message on this topic (seconds)', ['topic', 'type'])
 metric_topic_delay = Gauge('ros_blackbox_topic_delay', 'Delay of messages published on this topic (seconds)', ['topic', 'type'])
 metric_topic_rate = Gauge('ros_blackbox_topic_rate', 'Current publishing rate on the topic (Hz)', ['topic', 'type'])
@@ -102,6 +103,9 @@ class ROSSubscription:
         global metric_topic_offset, metric_topic_delay, metric_topic_rate, metric_topic_bandwidth
 
         msg = self.msgclass().deserialize(raw._buff)
+        
+        if msg is None:
+            metric_topic_ok.labels(topic=self.topic).set(0)
 
         if self.hz:
             self.hz.callback_hz(raw)
@@ -135,13 +139,21 @@ class ROSSubscription:
         hz = self.hz.get_hz()
         return round(hz[0] if hz else -1. , 2)
 
+def on_subscribe_success(topic: str):
+    metric_topic_ok.labels(topic=topic).set(1)
+
+def on_subscribe_failed(topic: str):
+    metric_topic_ok.labels(topic=topic).set(0)
+
 def subscribe(topic: str, metrics: MetricsConfig):
     try:
         sub: ROSSubscription = ROSSubscription(topic, **metrics.__dict__).listen()
         subscriptions[topic] = sub
         rospy.loginfo(f'Subscribed to {topic}')
+        on_subscribe_success(topic)
     except Exception as e:
         rospy.logerr('Failed to subscribe to %s (%s)', topic, e)
+        on_subscribe_failed(topic)
 
 
 def run_ros(topics: List[TopicConfig]):
