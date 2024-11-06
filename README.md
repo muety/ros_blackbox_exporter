@@ -39,6 +39,8 @@ docker run -d \
     ros_blackbox_exporter
 ```
 
+To include **custom message definitions**, mount a directory containing all your packages into the container at `/home/ros_ws/custom`.
+
 ## Metrics
 Metrics are exposed at http://localhost:8866.
 
