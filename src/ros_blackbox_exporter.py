@@ -56,16 +56,14 @@ class Config:
 class ROSTopicOffset:
     def __init__(self):
         self.lock: threading.Lock = threading.Lock()
-        self.ts_latest: float = 0.
-        self.ts_prev: float = 0.
-
+        self.ts: float = 0.
+    
     def callback_offset(self, data):
         with self.lock:
-            self.ts_prev = self.ts_latest
-            self.ts_latest = time.time()
+            self.ts = time.time()
     
     def get_offset(self) -> float:
-        return self.ts_latest - self.ts_prev
+        return time.time() - self.ts
     
 class ROSTopicBandwidth(rostopic.ROSTopicBandwidth):
     def get_bw(self):
