@@ -6,17 +6,18 @@ import logging
 import threading
 import time
 from typing import Any, Dict, List, Optional, Type
-from prometheus_client import start_http_server, Gauge
+from prometheus_client import REGISTRY, CollectorRegistry, start_http_server, Gauge
+from prometheus_client.registry import Collector
 import yaml
 import rospy, rostopic
 
 logging.basicConfig(level=logging.INFO)
 
 metric_topic_ok = Gauge('ros_blackbox_topic_ok', 'Whether topic is available or not', ['topic'])
-metric_topic_offset = Gauge('ros_blackbox_topic_offset', 'Time since last message on this topic (seconds)', ['topic', 'type'])
 metric_topic_delay = Gauge('ros_blackbox_topic_delay', 'Delay of messages published on this topic (seconds)', ['topic', 'type'])
 metric_topic_rate = Gauge('ros_blackbox_topic_rate', 'Current publishing rate on the topic (Hz)', ['topic', 'type'])
 metric_topic_bandwidth = Gauge('ros_blackbox_topic_bw', 'Current bandwidth published on the topic (bytes / s)', ['topic', 'type'])
+metric_topic_offset = Gauge('ros_blackbox_topic_offset', 'Time since last message on this topic (seconds)', ['topic', 'type'], registry=CollectorRegistry())
 
 subscriptions: Dict[str, 'ROSSubscription'] = {}
 
@@ -51,8 +52,7 @@ class Config:
     def from_dict(cls, payload: Dict[str, Any]) -> 'Config':
         topics = [ TopicConfig.from_dict(t) for t in payload.pop('topics') ]
         return cls(topics=topics, **payload)
-
-
+    
 class ROSTopicOffset:
     def __init__(self):
         self.lock: threading.Lock = threading.Lock()
@@ -63,7 +63,7 @@ class ROSTopicOffset:
             self.ts = time.time()
     
     def get_offset(self) -> float:
-        return time.time() - self.ts
+        return time.time() - self.ts if self.ts > 0 else -1
     
 class ROSTopicBandwidth(rostopic.ROSTopicBandwidth):
     def get_bw(self):
@@ -79,6 +79,19 @@ class ROSTopicBandwidth(rostopic.ROSTopicBandwidth):
             mean = total / n
             return mean
 
+class TopicOffsetCollector(Collector):
+    def __init__(self, metric: Gauge, offset: ROSTopicOffset, labels: Dict[str, str] = {}):
+        self.metric: Gauge = metric
+        self.offset: ROSTopicOffset = offset
+        self.labels: Dict[str, str] = labels
+        super().__init__()
+        REGISTRY.register(self)
+
+    def collect(self):
+        self.metric.labels(**self.labels).set(round(self.offset.get_offset(), 6))
+        yield from self.metric.collect()
+
+
 class ROSSubscription:
     def __init__(self, topic: str, offset: bool = True, delay: bool = True, bw: bool = False, rate: bool = True):
         self.topic: str = topic
@@ -89,6 +102,12 @@ class ROSSubscription:
         self.delay: Optional[rostopic.ROSTopicDelay] = rostopic.ROSTopicDelay(1000) if delay else None
         self.bw: Optional[ROSTopicBandwidth] = ROSTopicBandwidth(100) if bw else None
         self.offset: Optional[ROSTopicOffset] = ROSTopicOffset() if offset else None
+
+        self.offset_collector: TopicOffsetCollector = TopicOffsetCollector(
+            metric_topic_offset,
+            self.offset,
+            dict(topic=self.topic, type=self.msgtype),
+        )
 
         self.sub: rospy.Subscriber = None
 
@@ -121,15 +140,14 @@ class ROSSubscription:
 
         if self.offset:
             self.offset.callback_offset(raw)
-            metric_topic_offset.labels(topic=self.topic, type=self.msgtype).set(self._get_offset())
 
 
-    def _get_offset(self) -> float:
-        return round(self.offset.get_offset(), 6)
-    
     def _get_delay(self) -> float:
         delay = self.delay.get_delay()
         return round(delay[0] if delay else -1., 6)
+    
+    def _get_offset(self) -> float:
+        return round(self.offset.get_offset(), 6)
     
     def _get_bw(self) -> float:
         bw = self.bw.get_bw()
