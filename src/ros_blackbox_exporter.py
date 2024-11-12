@@ -120,10 +120,10 @@ class ROSSubscription:
                     self.msgtype = topic_type._type
                     self.msgclass = topic_type
                     self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback, queue_size=1)
-                    logging.info(f'Subscription to {self.topic} successful')
+                    rospy.loginfo(f'Subscription to {self.topic} successful')
                     return
                 except AttributeError:
-                    logging.warning(f'Topic {self.topic} not yet available, waiting ...')
+                    rospy.logwarn(f'Topic {self.topic} not yet available, waiting ...')
                     time.sleep(5)
 
         threading.Thread(target=try_subscribe, daemon=True).start()
@@ -191,7 +191,7 @@ def watchdog(node_name: str):
             master.getSystemState()
             time.sleep(5)
         except ConnectionRefusedError:
-            logging.warning('Lost connection to master, exiting now')
+            rospy.logwarn('Lost connection to master, exiting now')
             rospy.signal_shutdown('master unavailable')  # TODO: exit with error status code
             return  # TODO: try reconnect instead of crashing (see #2)
 
