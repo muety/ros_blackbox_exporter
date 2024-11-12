@@ -6,7 +6,7 @@ from functools import lru_cache
 import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 from prometheus_client import REGISTRY, CollectorRegistry, start_http_server, Gauge
 from prometheus_client.registry import Collector
 import yaml
@@ -86,17 +86,18 @@ class TopicOffsetCollector(Collector):
     def __init__(self, metric: Gauge):
         self.metric: Gauge = metric
         self.offsets: List[ROSTopicOffset] = []
-        self.labels: List[Dict[str, str]] = []
+        self.labels: List[Union[Dict[str, str], Callable[[], Dict[str, str]]]] = []
         super().__init__()
         REGISTRY.register(self)
 
-    def add(self, offset: ROSTopicOffset, labels: Dict[str, str] = {}):
+    def add(self, offset: ROSTopicOffset, labels: Union[Dict[str, str], Callable[[], Dict[str, str]]] = {}):
         self.offsets.append(offset)
         self.labels.append(labels)
 
     def collect(self):
         for i in range(len(self.offsets)):
-            self.metric.labels(**self.labels[i]).set(round(self.offsets[i].get_offset(), 6))
+            labels: Dict[str, str] = self.labels[i] if isinstance(self.labels[i], dict) else self.labels[i]()
+            self.metric.labels(**labels).set(round(self.offsets[i].get_offset(), 6))
         yield from self.metric.collect()
 
 
@@ -112,7 +113,7 @@ class ROSSubscription:
         self.offset: Optional[ROSTopicOffset] = ROSTopicOffset() if offset else None
 
         self.offset_collector: TopicOffsetCollector = TopicOffsetCollector(metric_topic_offset)  # get global singleton instance
-        self.offset_collector.add(self.offset, dict(topic=self.topic, type=self.msgtype))
+        self.offset_collector.add(self.offset, self.get_labels)
 
         self.sub: rospy.Subscriber = None
 
@@ -131,6 +132,9 @@ class ROSSubscription:
                     time.sleep(5)
 
         threading.Thread(target=try_subscribe, daemon=True).start()
+
+    def get_labels(self) -> Dict[str, str]:
+        return dict(topic=self.topic, type=self.msgtype)
 
 
     def callback(self, raw: rospy.AnyMsg):
