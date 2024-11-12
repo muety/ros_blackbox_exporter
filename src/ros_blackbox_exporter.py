@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import dataclass, field
+from functools import lru_cache
 import logging
 import threading
 import time
@@ -80,21 +81,27 @@ class ROSTopicBandwidth(rostopic.ROSTopicBandwidth):
             mean = total / n
             return mean
 
+@lru_cache(maxsize=None)  # singleton
 class TopicOffsetCollector(Collector):
-    def __init__(self, metric: Gauge, offset: ROSTopicOffset, labels: Dict[str, str] = {}):
+    def __init__(self, metric: Gauge):
         self.metric: Gauge = metric
-        self.offset: ROSTopicOffset = offset
-        self.labels: Dict[str, str] = labels
+        self.offsets: List[ROSTopicOffset] = []
+        self.labels: List[Dict[str, str]] = []
         super().__init__()
         REGISTRY.register(self)
 
+    def add(self, offset: ROSTopicOffset, labels: Dict[str, str] = {}):
+        self.offsets.append(offset)
+        self.labels.append(labels)
+
     def collect(self):
-        self.metric.labels(**self.labels).set(round(self.offset.get_offset(), 6))
+        for i in range(len(self.offsets)):
+            self.metric.labels(**self.labels[i]).set(round(self.offsets[i].get_offset(), 6))
         yield from self.metric.collect()
 
 
 class ROSSubscription:
-    def __init__(self, topic: str, offset: bool = True, delay: bool = True, bw: bool = False, rate: bool = True):
+    def __init__(self, topic: str, offset: bool = True, delay: bool = True, bw: bool = False, rate: bool = True, ):
         self.topic: str = topic
         self.msgtype: str = None
         self.msgclass: Type = None
@@ -104,11 +111,8 @@ class ROSSubscription:
         self.bw: Optional[ROSTopicBandwidth] = ROSTopicBandwidth(100) if bw else None
         self.offset: Optional[ROSTopicOffset] = ROSTopicOffset() if offset else None
 
-        self.offset_collector: TopicOffsetCollector = TopicOffsetCollector(
-            metric_topic_offset,
-            self.offset,
-            dict(topic=self.topic, type=self.msgtype),
-        )
+        self.offset_collector: TopicOffsetCollector = TopicOffsetCollector(metric_topic_offset)  # get global singleton instance
+        self.offset_collector.add(self.offset, dict(topic=self.topic, type=self.msgtype))
 
         self.sub: rospy.Subscriber = None
 
@@ -176,9 +180,9 @@ def on_subscribe_failed(topic: str):
 
 def subscribe(topic: str, metrics: MetricsConfig):
     try:
+        rospy.loginfo(f'Subscribing to {topic}')
         sub: ROSSubscription = ROSSubscription(topic, **metrics.__dict__).listen()
         subscriptions[topic] = sub
-        rospy.loginfo(f'Subscribed to {topic}')
         on_subscribe_success(topic)
     except Exception as e:
         rospy.logerr('Failed to subscribe to %s (%s)', topic, e)
