@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Type
 from prometheus_client import REGISTRY, CollectorRegistry, start_http_server, Gauge
 from prometheus_client.registry import Collector
 import yaml
+import rosgraph
 import rospy, rostopic
 
 logging.basicConfig(level=logging.INFO)
@@ -112,10 +113,20 @@ class ROSSubscription:
         self.sub: rospy.Subscriber = None
 
     def listen(self) -> 'ROSSubscription':
-        topic_type, _, _ = rostopic.get_topic_class(self.topic)
-        self.msgtype = topic_type._type
-        self.msgclass = topic_type
-        self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback, queue_size=1)
+        def try_subscribe():
+            while True:
+                try:
+                    topic_type, _, _ = rostopic.get_topic_class(self.topic)
+                    self.msgtype = topic_type._type
+                    self.msgclass = topic_type
+                    self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback, queue_size=1)
+                    logging.info(f'Subscription to {self.topic} successful')
+                    return
+                except AttributeError:
+                    logging.warning(f'Topic {self.topic} not yet available, waiting ...')
+                    time.sleep(5)
+
+        threading.Thread(target=try_subscribe, daemon=True).start()
 
 
     def callback(self, raw: rospy.AnyMsg):
@@ -173,9 +184,24 @@ def subscribe(topic: str, metrics: MetricsConfig):
         rospy.logerr('Failed to subscribe to %s (%s)', topic, e)
         on_subscribe_failed(topic)
 
+def watchdog(node_name: str):
+    master = rosgraph.Master(node_name)
+    while True:
+        try:
+            master.getSystemState()
+            time.sleep(5)
+        except ConnectionRefusedError:
+            logging.warning('Lost connection to master, exiting now')
+            rospy.signal_shutdown('master unavailable')  # TODO: exit with error status code
+            return  # TODO: try reconnect instead of crashing (see #2)
+
 
 def run_ros(topics: List[TopicConfig]):
-    rospy.init_node('ros_blackbox_exporter')
+    node_name: str = 'ros_blackbox_exporter'
+    rospy.init_node(node_name)
+
+    watchdog_thread = threading.Thread(target=watchdog, args=(node_name,), daemon=True)
+    watchdog_thread.start()
 
     for t in topics:
         subscribe(t.name, t.metrics)
