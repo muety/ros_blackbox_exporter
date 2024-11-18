@@ -140,18 +140,17 @@ class ROSSubscription:
     def callback(self, raw: rospy.AnyMsg):
         global metric_topic_offset, metric_topic_delay, metric_topic_rate, metric_topic_bandwidth
 
-        msg = self.msgclass().deserialize(raw._buff)
-        
-        if msg is None:
-            metric_topic_ok.labels(topic=self.topic).set(0)
-
         if self.hz:
             self.hz.callback_hz(raw)
             metric_topic_rate.labels(topic=self.topic, type=self.msgtype).set(self._get_hz())
 
         if self.delay:
-            self.delay.callback_delay(msg)
-            metric_topic_delay.labels(topic=self.topic, type=self.msgtype).set(self._get_delay())
+            msg = self.msgclass().deserialize(raw._buff)
+            if msg is None:
+                metric_topic_ok.labels(topic=self.topic).set(0)
+            else:
+                self.delay.callback_delay(msg)
+                metric_topic_delay.labels(topic=self.topic, type=self.msgtype).set(self._get_delay())
 
         if self.bw:
             self.bw.callback(raw)
