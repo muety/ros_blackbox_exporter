@@ -1,4 +1,0 @@
-<launch>
-    <arg name="config_file" default="$(find ros_blackbox_exporter)/exporter.yml" />
-    <node pkg="ros_blackbox_exporter" type="ros_blackbox_exporter.py" name="ros_blackbox_exporter" output="screen" args="-c $(arg config_file)"/>
-</launch>

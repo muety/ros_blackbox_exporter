@@ -4,3 +4,5 @@ venv
 dist
 *.egg-info
 build
+.vscode
+.idea

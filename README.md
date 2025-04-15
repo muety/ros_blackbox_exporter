@@ -47,8 +47,6 @@ ros2 launch \
 
 ### In Docker
 ```bash
-# Replace IP with the actual IP of your ROS master
-
 docker build . -t ros_blackbox_exporter
 docker run -d \
     -v $(pwd)/exporter.yml:/opt/exporter.yml \
@@ -94,6 +92,16 @@ Delay is the time difference between the message's header timestamp and the curr
 * Improved error handling / robustness
 * "On-demand" subscriptions, inspired by [blackbox_exporter](https://github.com/prometheus/blackbox_exporter)'s `?target=` syntax
 * ROS-free rewrite, e.g. using [goroslib](https://github.com/bluenviron/goroslib)
+
+## Developer notes
+To get auto-completion for ROS 2 Python libs in VSCode, add the following to your `.vscode/settings.json`.
+
+```json
+{
+   "python.autoComplete.extraPaths": ["/opt/ros/jazzy/lib/python3.12/site-packages"],
+   "python.analysis.extraPaths": ["/opt/ros/jazzy/lib/python3.12/site-packages"]
+}
+```
 
 ## License
 MIT
