@@ -1,10 +1,10 @@
 #!/bin/bash
 
-source /opt/ros/noetic/setup.bash
-source /home/ros_ws/devel/setup.bash
+source /opt/ros/jazzy/setup.bash
+source /home/ros_ws/install/setup.bash
 
 if [ -d "/home/ros_ws/custom" ]; then
     echo "Compiling custom message definitions"
     cp -r /home/ros_ws/custom/* /home/ros_ws/src/
-    catkin_make
+    colcon build
 fi

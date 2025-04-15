@@ -231,7 +231,7 @@ def read_config(path: str):
         config_dict = yaml.safe_load(f)
     return Config.from_dict(config_dict)
 
-if __name__ == '__main__':
+def main(args=None):
     parser = argparse.ArgumentParser('ROS Blackbox Exporter')
     parser.add_argument('--config', '-c', default='../exporter.yml', type=str, help='Path to config YAML')
     parsed_args, _ = parser.parse_known_args()
@@ -244,3 +244,6 @@ if __name__ == '__main__':
     
     server.shutdown()
     thread.join()
+    
+if __name__ == '__main__':
+    main()
