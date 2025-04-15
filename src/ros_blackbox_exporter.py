@@ -10,8 +10,16 @@ from typing import Any, Callable, Dict, List, Optional, Type, Union
 from prometheus_client import REGISTRY, CollectorRegistry, start_http_server, Gauge
 from prometheus_client.registry import Collector
 import yaml
-import rosgraph
-import rospy, rostopic
+
+import rclpy
+from rclpy.subscription import Subscription
+from rclpy.node import Node
+from rclpy.qos import qos_profile_default, qos_profile_sensor_data
+from rclpy.serialization import deserialize_message
+from ros2topic.verb.bw import ROSTopicBandwidth as ROS2TopicBandwidth
+from ros2topic.verb.hz import ROSTopicHz as ROS2TopicHz
+from ros2topic.verb.delay import ROSTopicDelay as ROS2TopicDelay
+from rosidl_runtime_py.utilities import get_message
 
 logging.basicConfig(level=logging.INFO)
 
@@ -56,7 +64,7 @@ class Config:
         return cls(topics=topics, **payload)
     
 class ROSTopicOffset:
-    def __init__(self):
+    def __init__(self, node: Node):
         self.lock: threading.Lock = threading.Lock()
         self.ts: float = 0.
     
@@ -67,17 +75,17 @@ class ROSTopicOffset:
     def get_offset(self) -> float:
         return time.time() - self.ts if self.ts > 0 else -1
     
-class ROSTopicBandwidth(rostopic.ROSTopicBandwidth):
+class ROSTopicBandwidth(ROS2TopicBandwidth):
     def get_bw(self):
         if len(self.times) < 2:
             return
         with self.lock:
             n = len(self.times)
-            tn = time.time()
+            tn = self.clock.now()
             t0 = self.times[0]
             
             total = sum(self.sizes)
-            bytes_per_s = total / (tn - t0)
+            bytes_per_s = total / ((tn - t0).nanoseconds * 1e-9)
             mean = total / n
             return mean
 
@@ -102,33 +110,35 @@ class TopicOffsetCollector(Collector):
 
 
 class ROSSubscription:
-    def __init__(self, topic: str, offset: bool = True, delay: bool = True, bw: bool = False, rate: bool = True, ):
+    def __init__(self, node: Node, topic: str, offset: bool = True, delay: bool = True, bw: bool = False, rate: bool = True):
+        self.node = node
+        
         self.topic: str = topic
         self.msgtype: str = None
         self.msgclass: Type = None
 
-        self.hz: Optional[rostopic.ROSTopicHz] = rostopic.ROSTopicHz(1000) if rate else None
-        self.delay: Optional[rostopic.ROSTopicDelay] = rostopic.ROSTopicDelay(1000) if delay else None
-        self.bw: Optional[ROSTopicBandwidth] = ROSTopicBandwidth(100) if bw else None
-        self.offset: Optional[ROSTopicOffset] = ROSTopicOffset() if offset else None
+        self.hz: Optional[ROS2TopicHz] = ROS2TopicHz(self.node, 1000) if rate else None
+        self.delay: Optional[ROS2TopicDelay] = ROS2TopicDelay(self.node, 1000) if delay else None
+        self.bw: Optional[ROSTopicBandwidth] = ROSTopicBandwidth(self.node, 100) if bw else None
+        self.offset: Optional[ROSTopicOffset] = ROSTopicOffset(self.node) if offset else None
 
         self.offset_collector: TopicOffsetCollector = TopicOffsetCollector(metric_topic_offset)  # get global singleton instance
         self.offset_collector.add(self.offset, self.get_labels)
 
-        self.sub: rospy.Subscriber = None
-
+        self.sub: Subscription = None
+        
     def listen(self) -> 'ROSSubscription':
         def try_subscribe():
             while True:
                 try:
-                    topic_type, _, _ = rostopic.get_topic_class(self.topic)
-                    self.msgtype = topic_type._type
-                    self.msgclass = topic_type
-                    self.sub = rospy.Subscriber(self.topic, rospy.AnyMsg, self.callback, queue_size=1)
-                    rospy.loginfo(f'Subscription to {self.topic} successful')
+                    self.msgtype = self.get_topic_type(self.topic)
+                    self.msgclass = get_message(self.msgtype)
+                    self.sub = self.node.create_subscription(self.msgclass, self.topic, self.callback, qos_profile_sensor_data, raw=True)
+                    self.node.get_logger().info(f'Subscription to {self.topic} successful')
                     return
-                except AttributeError:
-                    rospy.logwarn(f'Topic {self.topic} not yet available, waiting ...')
+                except (AttributeError, KeyError) as e:
+                    print(e)
+                    self.node.get_logger().warn(f'Topic {self.topic} not yet available, waiting ...')
                     time.sleep(5)
 
         threading.Thread(target=try_subscribe, daemon=True).start()
@@ -136,19 +146,25 @@ class ROSSubscription:
     def get_labels(self) -> Dict[str, str]:
         return dict(topic=self.topic, type=self.msgtype)
 
+    def get_topic_type(self, topic: str) -> str:
+        for tname, ttypes in self.node.get_topic_names_and_types():
+            if tname == topic:
+                return ttypes[0]
+        raise KeyError(f'topic {topic} not published')
 
-    def callback(self, raw: rospy.AnyMsg):
+    def callback(self, raw):
         global metric_topic_offset, metric_topic_delay, metric_topic_rate, metric_topic_bandwidth
 
         if self.hz:
             self.hz.callback_hz(raw)
-            metric_topic_rate.labels(topic=self.topic, type=self.msgtype).set(self._get_hz())
-
+            if (hz := self._get_hz()) >= 0:
+                metric_topic_rate.labels(topic=self.topic, type=self.msgtype).set(hz)
+        
         if self.delay:
-            msg = self.msgclass().deserialize(raw._buff)
-            if msg is None:
+            if raw is None:
                 metric_topic_ok.labels(topic=self.topic).set(0)
             else:
+                msg = deserialize_message(raw, self.msgclass)
                 self.delay.callback_delay(msg)
                 metric_topic_delay.labels(topic=self.topic, type=self.msgtype).set(self._get_delay())
 
@@ -173,47 +189,42 @@ class ROSSubscription:
     
     def _get_hz(self) -> float:
         hz = self.hz.get_hz()
-        return round(hz[0] if hz else -1. , 2)
+        return round(hz[0] * 1e9 if hz else -1. , 2)
 
-def on_subscribe_success(topic: str):
-    metric_topic_ok.labels(topic=topic).set(1)
+class ROSBlackboxExporterNode(Node):
+    def __init__(self, topics: List[TopicConfig]):
+        node_name: str = 'ros_blackbox_exporter'
+        
+        super().__init__(node_name)
+        
+        for t in topics:
+            self.subscribe(t.name, t.metrics)
 
-def on_subscribe_failed(topic: str):
-    metric_topic_ok.labels(topic=topic).set(0)
+    def on_subscribe_success(self, topic: str):
+        metric_topic_ok.labels(topic=topic).set(1)
 
-def subscribe(topic: str, metrics: MetricsConfig):
-    try:
-        rospy.loginfo(f'Subscribing to {topic}')
-        sub: ROSSubscription = ROSSubscription(topic, **metrics.__dict__).listen()
-        subscriptions[topic] = sub
-        on_subscribe_success(topic)
-    except Exception as e:
-        rospy.logerr('Failed to subscribe to %s (%s)', topic, e)
-        on_subscribe_failed(topic)
+    def on_subscribe_failed(self, topic: str):
+        metric_topic_ok.labels(topic=topic).set(0)
 
-def watchdog(node_name: str):
-    master = rosgraph.Master(node_name)
-    while True:
+    def subscribe(self, topic: str, metrics: MetricsConfig):
         try:
-            master.getSystemState()
-            time.sleep(5)
-        except ConnectionRefusedError:
-            rospy.logwarn('Lost connection to master, exiting now')
-            rospy.signal_shutdown('master unavailable')  # TODO: exit with error status code
-            return  # TODO: try reconnect instead of crashing (see #2)
+            self.get_logger().info(f'Subscribing to {topic}')
+            sub: ROSSubscription = ROSSubscription(self, topic, **metrics.__dict__).listen()
+            subscriptions[topic] = sub
+            self.on_subscribe_success(topic)
+        except Exception as e:
+            self.get_logger().error(f'Failed to subscribe to {topic}, {e}')
+            self.on_subscribe_failed(topic)
 
 
-def run_ros(topics: List[TopicConfig]):
-    node_name: str = 'ros_blackbox_exporter'
-    rospy.init_node(node_name)
-
-    watchdog_thread = threading.Thread(target=watchdog, args=(node_name,), daemon=True)
-    watchdog_thread.start()
-
-    for t in topics:
-        subscribe(t.name, t.metrics)
+def run_ros(topics: List[TopicConfig], args=None):
+    rclpy.init(args=args)
     
-    rospy.spin()
+    node = ROSBlackboxExporterNode(topics)
+    rclpy.spin(node)
+    
+    node.destroy_node()
+    rclpy.shutdown()
 
 def read_config(path: str):
     with open(path, 'r') as f:
@@ -229,7 +240,7 @@ if __name__ == '__main__':
 
     server, thread = start_http_server(port=config.port, addr=config.addr)
     
-    run_ros(config.topics)
+    run_ros(config.topics, None)
     
     server.shutdown()
     thread.join()

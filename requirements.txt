@@ -1,1 +1,6 @@
+setuptools
 prometheus-client
+pyyaml
+packaging
+numpy<2.0
+psutil

@@ -1,2 +1,6 @@
 .env
 custom_pkgs
+venv
+dist
+*.egg-info
+build
